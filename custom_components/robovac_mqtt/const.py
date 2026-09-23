@@ -35,6 +35,12 @@ CONF_LOCAL_HOST: Final = "host"
 CONF_LOCAL_VERSION: Final = "version"
 CONF_ROOM_NAMES: Final = "rooms"
 
+# Bearer token for the unified "Anker eufy" app namespace (app-name:
+# eufy_mega). Accounts whose robot was migrated to that app disappear from the
+# legacy eufy_home device list, so the token is the only way to reach them
+# until the app's ECDH login is reimplemented (issue #121).
+CONF_MEGA_TOKEN: Final = "mega_token"
+
 # Eufy API URLs
 EUFY_API_BASE_URL: Final = "https://api.eufylife.com"
 EUFY_HOME_API_BASE_URL: Final = "https://home-api.eufylife.com"
@@ -62,6 +68,33 @@ TUYA_PRODUCT_MODELS: Final[dict[str, str]] = {
 }
 EUFY_API_MQTT_INFO: Final = (
     f"{EUFY_AIOT_API_BASE_URL}/app/devicemanage/get_user_mqtt_info"
+)
+
+# --- Unified "Anker eufy" app (app-name: eufy_mega) -------------------------
+# A device moved into the unified app is re-bound into the eufy_mega namespace.
+# The legacy eufy_home endpoints then return an empty device list, and the MQTT
+# broker denies the device's topics, which is what "No Eufy Clean devices could
+# be initialized" actually means for a migrated account.
+#
+# Three things differ from the legacy path, all verified against a live
+# migrated account (X10 Pro Omni / T2351):
+#   * the EU AIOT host answers, aiot-clean-api-pr does not;
+#   * the device list moved to /app/house/get_devs_list — the old
+#     /app/devicerelation/get_device_list returns code 10000 here;
+#   * MQTT credentials must be fetched under app-name eufy_mega, but the
+#     device's topics are still cmd|biz/eufy_home/<model>/<sn>/… . Subscribing
+#     under eufy_mega is denied; eufy_mega credentials on eufy_home topics are
+#     granted. That mismatch is the crux of the migration.
+#
+# These endpoints take a plain bearer token: the ECDH request signing that
+# guards the *-pr.eufy.com app services is NOT enforced here.
+EUFY_AIOT_API_EU_BASE_URL: Final = "https://aiot-clean-api-eu.eufylife.com"
+EUFY_MEGA_APP_NAME: Final = "eufy_mega"
+EUFY_API_MEGA_DEVICE_LIST: Final = (
+    f"{EUFY_AIOT_API_EU_BASE_URL}/app/house/get_devs_list"
+)
+EUFY_API_MEGA_MQTT_INFO: Final = (
+    f"{EUFY_AIOT_API_EU_BASE_URL}/app/devicemanage/get_user_mqtt_info"
 )
 
 

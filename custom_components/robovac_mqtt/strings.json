@@ -5,14 +5,22 @@
         "title": "Login",
         "data": {
           "username": "Email address",
-          "password": "Password"
+          "password": "Password",
+          "mega_token": "Unified app token (eufy_mega)"
+        },
+        "data_description": {
+          "mega_token": "Only needed if your robot was moved to the new Anker eufy app. Paste the x-auth-token value captured from that app. Leave blank otherwise."
         }
       },
       "reconfigure": {
         "title": "Reconfigure",
         "data": {
           "username": "Email address",
-          "password": "Password"
+          "password": "Password",
+          "mega_token": "Unified app token (eufy_mega)"
+        },
+        "data_description": {
+          "mega_token": "Only needed if your robot was moved to the new Anker eufy app. Paste the x-auth-token value captured from that app. Leave blank otherwise."
         }
       },
       "reauth_confirm": {

@@ -22,6 +22,7 @@ from .const import (
     CONF_LOCAL_DEVICES,
     CONF_LOCAL_HOST,
     CONF_LOCAL_VERSION,
+    CONF_MEGA_TOKEN,
     CONF_ROOM_NAMES,
     DOMAIN,
 )
@@ -117,7 +118,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Initialize Login Controller
     session = async_get_clientsession(hass)
-    eufy_login = EufyLogin(username, password, openudid, websession=session)
+    eufy_login = EufyLogin(
+        username,
+        password,
+        openudid,
+        websession=session,
+        mega_token=entry.data.get(CONF_MEGA_TOKEN),
+    )
     try:
         await eufy_login.init()
     except EufyLoginError as e:

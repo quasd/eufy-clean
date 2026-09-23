@@ -24,6 +24,7 @@ from .const import (
     CONF_LOCAL_HOST,
     CONF_LOCAL_VERSION,
     CONF_MAP_MAX_PX,
+    CONF_MEGA_TOKEN,
     CONF_NOTIFY_DESKTOP,
     CONF_NOTIFY_MOBILE_SERVICE,
     CONF_ROBOT_STYLE,
@@ -42,6 +43,9 @@ USER_SCHEMA = Schema(
     {
         Required(CONF_USERNAME): cv.string,
         Required(CONF_PASSWORD): cv.string,
+        # Optional: only accounts migrated to the unified "Anker eufy" app need
+        # this. Leave blank for a normal eufy Clean account.
+        VOptional(CONF_MEGA_TOKEN): cv.string,
     }
 )
 
@@ -70,7 +74,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
         await self.async_set_unique_id(username)
         self._abort_if_unique_id_configured()
 
-        title, errors = await self._login_and_get_title(username, user_input[CONF_PASSWORD])
+        title, errors = await self._login_and_get_title(
+            username,
+            user_input[CONF_PASSWORD],
+            user_input.get(CONF_MEGA_TOKEN),
+        )
 
         if not errors:
             data = user_input.copy()
@@ -89,11 +97,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
         assert entry
         current_username = entry.data[CONF_USERNAME]
 
+        current_token = entry.data.get(CONF_MEGA_TOKEN, "")
+
         if user_input is None:
             schema = Schema(
                 {
                     Required(CONF_USERNAME, default=current_username): cv.string,
                     Required(CONF_PASSWORD): cv.string,
+                    VOptional(CONF_MEGA_TOKEN, default=current_token): cv.string,
                 }
             )
             return self.async_show_form(
@@ -108,12 +119,20 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
         if username != current_username:
             errors[CONF_USERNAME] = "username_mismatch"
         else:
-            title, errors = await self._login_and_get_title(username, user_input[CONF_PASSWORD])
+            title, errors = await self._login_and_get_title(
+                username,
+                user_input[CONF_PASSWORD],
+                user_input.get(CONF_MEGA_TOKEN),
+            )
 
         if not errors:
             return self.async_update_reload_and_abort(
                 entry,
-                data={**entry.data, CONF_PASSWORD: user_input[CONF_PASSWORD]},
+                data={
+                    **entry.data,
+                    CONF_PASSWORD: user_input[CONF_PASSWORD],
+                    CONF_MEGA_TOKEN: user_input.get(CONF_MEGA_TOKEN, ""),
+                },
                 title=title,
             )
 
@@ -121,6 +140,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
             {
                 Required(CONF_USERNAME, default=current_username): cv.string,
                 Required(CONF_PASSWORD): cv.string,
+                VOptional(CONF_MEGA_TOKEN, default=current_token): cv.string,
             }
         )
         return self.async_show_form(
@@ -149,7 +169,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
             )
 
         _title, errors = await self._login_and_get_title(
-            username, user_input[CONF_PASSWORD]
+            username, user_input[CONF_PASSWORD], entry.data.get(CONF_MEGA_TOKEN)
         )
 
         if not errors:
@@ -167,7 +187,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
         )
 
     async def _login_and_get_title(
-        self, username: str, password: str
+        self, username: str, password: str, mega_token: str | None = None
     ) -> tuple[str, dict[str, str]]:
         """Login and return (title, errors).
 
@@ -180,7 +200,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
             openudid = "".join(random.choices(string.hexdigits, k=32))
             _LOGGER.info("Trying to login with username: %s", username)
             session = async_get_clientsession(self.hass)
-            eufy_login = EufyLogin(username, password, openudid, websession=session)
+            eufy_login = EufyLogin(
+                username,
+                password,
+                openudid,
+                websession=session,
+                mega_token=mega_token,
+            )
             await eufy_login.init()
             devices = eufy_login.mqtt_devices + eufy_login.cloud_devices
             if devices:

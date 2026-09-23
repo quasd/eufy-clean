@@ -38,8 +38,12 @@ class EufyLogin:
         password: str,
         openudid: str,
         websession: Any | None = None,
+        mega_token: str | None = None,
     ):
-        self.eufyApi = EufyHTTPClient(username, password, openudid, websession=websession)
+        self.eufyApi = EufyHTTPClient(
+            username, password, openudid, websession=websession,
+            mega_token=mega_token,
+        )
         self.username = username
         self.password = password
         self.openudid = openudid
@@ -118,6 +122,12 @@ class EufyLogin:
             raise
 
     async def getDevices(self) -> None:
+        if self.eufyApi.mega_token:
+            # Migrated account: the legacy namespace has nothing to offer, so
+            # skip it entirely rather than logging a misleading empty result.
+            await self._get_mega_devices()
+            return
+
         self.eufy_api_devices = await self.eufyApi.get_cloud_device_list()
         _LOGGER.debug("Eufy API returned %d devices from cloud list", len(self.eufy_api_devices))
         devices = await self.eufyApi.get_device_list()
@@ -158,6 +168,44 @@ class EufyLogin:
             len(self.mqtt_devices),
             len(devices),
             [(d["deviceName"], d["apiType"]) for d in self.mqtt_devices],
+        )
+
+    async def _get_mega_devices(self) -> None:
+        """Populate mqtt_devices from the unified-app (eufy_mega) device list."""
+        raw = await self.eufyApi.get_mega_device_list()
+        self.eufy_api_devices = []
+        devices: list[dict[str, Any]] = []
+        for entry in raw:
+            device_sn = entry.get("device_sn")
+            if not device_sn:
+                continue
+            info = self.findModel(device_sn, aiot_device=entry)
+            if info["invalid"]:
+                _LOGGER.warning(
+                    "Skipping unrecognised eufy_mega device %s (model %r)",
+                    device_sn,
+                    entry.get("device_model"),
+                )
+                continue
+            devices.append(
+                {
+                    **info,
+                    # get_devs_list carries no DPS snapshot, so checkApiType()
+                    # cannot sniff the protocol from initial state the way the
+                    # legacy path does — it would see {} and wrongly say
+                    # "legacy", building the wrong entity set. Everything
+                    # reachable over this namespace is a protobuf device.
+                    "apiType": "novel",
+                    "mqtt": True,
+                    "dps": {},
+                    "softVersion": entry.get("main_sw_version") or "",
+                    "reconstructed": False,
+                }
+            )
+        self.mqtt_devices = devices
+        _LOGGER.debug(
+            "eufy_mega devices: %s",
+            [(d["deviceName"], d["deviceModel"]) for d in devices],
         )
 
     async def getCloudDevices(self) -> None:

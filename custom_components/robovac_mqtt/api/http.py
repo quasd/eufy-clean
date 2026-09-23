@@ -8,6 +8,9 @@ import aiohttp
 
 from ..const import (
     EUFY_API_DEVICE_LIST,
+    EUFY_API_MEGA_DEVICE_LIST,
+    EUFY_API_MEGA_MQTT_INFO,
+    EUFY_MEGA_APP_NAME,
     EUFY_API_DEVICE_LIST_HOME,
     EUFY_API_DEVICE_V2,
     EUFY_API_LOGIN,
@@ -50,6 +53,7 @@ class EufyHTTPClient:
         password: str,
         openudid: str,
         websession: aiohttp.ClientSession,
+        mega_token: str | None = None,
     ) -> None:
         self.username = username
         self.password = password
@@ -57,6 +61,66 @@ class EufyHTTPClient:
         self._websession = websession
         self.session: dict[str, Any] | None = None
         self.user_info: dict[str, Any] | None = None
+        # Bearer token for the unified-app (eufy_mega) namespace. Supplied by
+        # the user; username/password login still runs because the eufy user_id
+        # it returns is what gtoken is derived from.
+        self.mega_token = mega_token or None
+
+    def _mega_headers(self) -> dict[str, str]:
+        """Headers for the eufy_mega AIOT endpoints.
+
+        gtoken is md5(user_id), exactly as on the legacy path — the unified app
+        derives it the same way, so no extra call is needed to obtain it.
+        """
+        user_id = (self.session or {}).get("user_id", "")
+        return {
+            "content-type": "application/json; charset=UTF-8",
+            "accept": "application/json",
+            "user-agent": "ktor-client",
+            "openudid": self.openudid,
+            "os-type": "android",
+            "os-version": "29",
+            "model-type": "PAD",
+            "app-name": EUFY_MEGA_APP_NAME,
+            "app-version": "6.0.90_29798",
+            "x-auth-token": self.mega_token or "",
+            "authorization": self.mega_token or "",
+            "gtoken": hashlib.md5(user_id.encode()).hexdigest(),
+        }
+
+    async def get_mega_device_list(self) -> list[dict[str, Any]]:
+        """Device list for an account migrated to the unified "Anker eufy" app.
+
+        Returns the raw ``devices`` entries: each carries ``device_sn``,
+        ``device_model`` and ``device_name``, but no ``dps`` snapshot — live
+        state arrives over MQTT instead.
+        """
+        if not self.mega_token:
+            return []
+        async with self._websession.post(
+            EUFY_API_MEGA_DEVICE_LIST,
+            timeout=_REQUEST_TIMEOUT,
+            headers=self._mega_headers(),
+            json={},
+        ) as response:
+            if response.status != 200:
+                _LOGGER.error(
+                    "eufy_mega device list failed: status=%s", response.status
+                )
+                return []
+            data = await response.json()
+            if data.get("code") != 0:
+                # 401 "token not exist" means the pasted token has expired or
+                # belongs to a different namespace.
+                _LOGGER.error(
+                    "eufy_mega device list rejected (code=%s): %s",
+                    data.get("code"),
+                    data.get("msg"),
+                )
+                return []
+            devices = (data.get("data") or {}).get("devices") or []
+            _LOGGER.debug("eufy_mega device list returned %d device(s)", len(devices))
+            return devices
 
     async def login(self, validate_only: bool = False) -> dict[str, Any]:
         """Log in, preferring a credential set whose token yields a user_center id.
@@ -107,7 +171,10 @@ class EufyHTTPClient:
             )
             self.session = fallback_session
             self.user_info = None
-            return {"session": fallback_session, "user": None, "mqtt": None}
+            # A eufy_mega token does not depend on user_center, so MQTT is still
+            # reachable on the fallback session.
+            mqtt = await self.get_mqtt_credentials() if self.mega_token else None
+            return {"session": fallback_session, "user": None, "mqtt": mqtt}
 
         _LOGGER.error("All login attempts failed.")
         return {}
@@ -309,6 +376,22 @@ class EufyHTTPClient:
 
     async def get_mqtt_credentials(self) -> dict[str, Any] | None:
         """Get MQTT credentials."""
+        if self.mega_token:
+            # The certificate is issued for thing "<user_id>-eufy_mega"; it is
+            # what the broker accepts for this device's (still eufy_home) topics.
+            async with self._websession.post(
+                EUFY_API_MEGA_MQTT_INFO,
+                timeout=_REQUEST_TIMEOUT,
+                headers=self._mega_headers(),
+                json={},
+            ) as response:
+                if response.status == 200:
+                    return (await response.json()).get("data")
+                _LOGGER.error(
+                    "eufy_mega MQTT credentials failed: status=%s", response.status
+                )
+                return None
+
         if not self.user_info:
             _LOGGER.error("Cannot get MQTT credentials: user_info is None")
             return None
