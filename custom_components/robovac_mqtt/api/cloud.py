@@ -60,6 +60,13 @@ class EufyLogin:
         await self.login({"mqtt": True})
         await self.getDevices()
 
+        # A token acquired during discovery arrives after login() fetched the
+        # MQTT credentials, and the legacy certificate is not accepted for a
+        # migrated device's topics — so re-fetch under eufy_mega.
+        if self.eufyApi.mega_token and self.mqtt_devices:
+            if mega_mqtt := await self.eufyApi.get_mqtt_credentials():
+                self.mqtt_credentials = mega_mqtt
+
         # Attempt Tuya Cloud login for legacy cloud devices
         try:
             await self.tuya_login()
@@ -169,6 +176,16 @@ class EufyLogin:
             len(devices),
             [(d["deviceName"], d["apiType"]) for d in self.mqtt_devices],
         )
+
+        # A migrated account looks exactly like an empty one on the legacy
+        # namespace, so an empty result is the cue to try the unified-app
+        # backend. Accounts that already found devices never reach this.
+        if not self.mqtt_devices and not self.eufy_api_devices:
+            _LOGGER.debug(
+                "Legacy namespace returned no devices; trying the eufy_mega backend"
+            )
+            if await self.eufyApi.ensure_mega_token():
+                await self._get_mega_devices()
 
     async def _get_mega_devices(self) -> None:
         """Populate mqtt_devices from the unified-app (eufy_mega) device list."""

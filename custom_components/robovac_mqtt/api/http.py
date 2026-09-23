@@ -18,6 +18,7 @@ from ..const import (
     EUFY_API_MQTT_INFO,
     EUFY_API_USER_INFO,
 )
+from .mega_api import MegaApiError, MegaHTTPApi, MegaLoginRequiresVerification
 
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 
@@ -65,6 +66,9 @@ class EufyHTTPClient:
         # the user; username/password login still runs because the eufy user_id
         # it returns is what gtoken is derived from.
         self.mega_token = mega_token or None
+        # Set when the token came from an automatic eufy_mega login rather than
+        # from the user pasting one; gtoken derives from this user_id.
+        self._mega_user_id: str | None = None
 
     def _mega_headers(self) -> dict[str, str]:
         """Headers for the eufy_mega AIOT endpoints.
@@ -72,7 +76,7 @@ class EufyHTTPClient:
         gtoken is md5(user_id), exactly as on the legacy path — the unified app
         derives it the same way, so no extra call is needed to obtain it.
         """
-        user_id = (self.session or {}).get("user_id", "")
+        user_id = self._mega_user_id or (self.session or {}).get("user_id", "")
         return {
             "content-type": "application/json; charset=UTF-8",
             "accept": "application/json",
@@ -87,6 +91,33 @@ class EufyHTTPClient:
             "authorization": self.mega_token or "",
             "gtoken": hashlib.md5(user_id.encode()).hexdigest(),
         }
+
+    async def ensure_mega_token(self) -> bool:
+        """Obtain a eufy_mega token by logging in to the unified-app backend.
+
+        Returns False (and logs why) rather than raising: a failure here only
+        means the account is not reachable that way, and the caller keeps
+        whatever the legacy namespace produced.
+        """
+        if self.mega_token:
+            return True
+
+        api = MegaHTTPApi(self._websession, self.openudid)
+        try:
+            await api.login(self.username, self.password)
+        except MegaLoginRequiresVerification as e:
+            _LOGGER.warning(
+                "eufy_mega automatic login needs interactive verification: %s", e
+            )
+            return False
+        except (MegaApiError, aiohttp.ClientError, TimeoutError, OSError) as e:
+            _LOGGER.warning("eufy_mega automatic login failed: %s", e)
+            return False
+
+        self.mega_token = api.auth_token
+        self._mega_user_id = api.user_id
+        _LOGGER.info("Obtained a eufy_mega token via automatic login")
+        return True
 
     async def get_mega_device_list(self) -> list[dict[str, Any]]:
         """Device list for an account migrated to the unified "Anker eufy" app.
